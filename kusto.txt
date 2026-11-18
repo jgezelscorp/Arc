@@ -1,0 +1,20 @@
+resources
+| where type =~ 'microsoft.hybridcompute/machines'
+| extend machineId = toupper(id)
+| extend osType = tostring(properties.osType),
+         machineStatus = tostring(properties.status),
+         sqlDetected = tostring(properties.detectedProperties.mssqldiscovered) =~ 'true'
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.hybridcompute/machines/extensions'
+    | where tostring(properties.type) in~ ('WindowsAgent.SqlServer','LinuxAgent.SqlServer')
+    | project machineId = toupper(substring(id, 0, indexof(id, '/extensions'))),
+              sqlExtensionState = tostring(properties.provisioningState),
+              sqlLicenseType = tostring(properties.settings.LicenseType)
+  ) on machineId
+| where sqlDetected or isnotempty(sqlExtensionState)
+| extend sqlExtensionInstalled = isnotempty(sqlExtensionState)
+| extend sqlLicenseType = iff(sqlExtensionInstalled and isempty(sqlLicenseType), 'Configuration needed', sqlLicenseType)
+| project machineName = name, resourceGroup, subscriptionId, machineStatus,
+          sqlDetected, sqlExtensionInstalled, sqlExtensionState, sqlLicenseType
+| order by sqlExtensionInstalled asc, machineName asc
