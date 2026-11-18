@@ -1,0 +1,51 @@
+// Azure Resource Graph query
+// Lists Arc-enabled machines that have discovered SQL Server instances.
+
+let ArcMachines = resources
+| where type =~ 'microsoft.hybridcompute/machines'
+| project
+    machineId = tolower(id),
+    machineName = name,
+    subscriptionId,
+    resourceGroup,
+    location,
+    osType = tostring(properties.osType),
+    machineStatus = tostring(properties.status);
+
+let ArcSqlInstances = resources
+| where type =~ 'microsoft.azurearcdata/sqlserverinstances'
+| extend machineId = tolower(split(id, '/providers/Microsoft.AzureArcData/sqlServerInstances/')[0])
+| project
+    machineId,
+    sqlInstanceName = name,
+    sqlInstanceId = id,
+    sqlVersion = tostring(properties.version),
+    sqlEdition = tostring(properties.edition),
+    sqlLicenseType = tostring(properties.licenseType),
+    sqlStatus = tostring(properties.status);
+
+let ArcSqlExtensions = resources
+| where type =~ 'microsoft.hybridcompute/machines/extensions'
+| extend machineId = tolower(split(id, '/extensions/')[0])
+| where name has '/WindowsAgent.SqlServer' or name has '/LinuxAgent.SqlServer'
+| summarize
+    sqlExtensionCount = count(),
+    sqlExtensionNames = make_set(tostring(split(name, '/')[1]), 16)
+    by machineId;
+
+ArcMachines
+| join kind=inner ArcSqlInstances on machineId
+| join kind=leftouter ArcSqlExtensions on machineId
+| summarize
+    sqlInstanceCount = count(),
+    sqlInstances = make_set(sqlInstanceName, 128),
+    sqlVersions = make_set(sqlVersion, 32),
+    sqlEditions = make_set(sqlEdition, 32),
+    sqlLicenseTypes = make_set(sqlLicenseType, 32),
+    sqlExtensionCount = max(toint(coalesce(sqlExtensionCount, 0))),
+    sqlExtensionNames = any(sqlExtensionNames)
+    by subscriptionId, resourceGroup, machineName, machineResourceId = machineId, osType, location, machineStatus
+| extend
+    sqlExtensionInstalled = sqlExtensionCount > 0,
+    sqlExtensionInstalledCheckbox = iff(sqlExtensionInstalled, '[x]', '[ ]')
+| order by subscriptionId asc, resourceGroup asc, machineName asc
